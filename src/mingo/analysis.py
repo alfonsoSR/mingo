@@ -419,6 +419,8 @@ class Hit_distribution(Base):
 
         super().__init__(db)
 
+        self.plane_number = None
+
         # Plot configuration
         self.plot_config.xscale = "linear"
         self.plot_config.yscale = "linear"
@@ -451,13 +453,18 @@ class Hit_distribution(Base):
         return None
 
     def _dist_stmt(self, tmp: Subquery | None,
-                   id: int, energy: float) -> Select[tuple[Any, int]]:
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
 
-        return (select(self.event.n_hits, func.count(self.event.e_0))
-                .where(self.event.fk_config == id)
-                .where(self.event.e_0 == energy)
-                .group_by(self.event.n_hits)
-                .order_by(self.event.n_hits))
+        if grouped:
+            return (select(self.event.n_hits, func.count(self.event.e_0))
+                    .where(self.event.fk_config == id)
+                    .where(self.event.e_0 == energy)
+                    .group_by(self.event.n_hits)
+                    .order_by(self.event.n_hits))
+        else:
+            return (select(self.event.n_hits)
+                    .where(self.event.fk_config == id)
+                    .where(self.event.e_0 == energy))
 
 
 class Shower_depth(Base):
@@ -473,6 +480,8 @@ class Shower_depth(Base):
     def __init__(self, db: Database) -> None:
 
         super().__init__(db)
+
+        self.plane_number = None
 
         # Plot configuration
         self.plot_config.xscale = "linear"
@@ -505,19 +514,173 @@ class Shower_depth(Base):
         return _stmt
 
     def _dist_stmt(self, tmp: Subquery | None,
-                   id: int, energy: float) -> Select[tuple[Any, int]]:
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
 
         if tmp is None:
             raise TypeError("Expected tmp of type Subquery, got None")
 
-        return (select(tmp.c.avg_z, func.count(tmp.c.avg_z))
-                .where(tmp.c.e_0 == energy)
-                .group_by(tmp.c.avg_z))
+        if grouped: 
+            return (select(tmp.c.avg_z, func.count(tmp.c.avg_z))
+                    .where(tmp.c.e_0 == energy)
+                    .group_by(tmp.c.avg_z))
+        else:
+            return(select(tmp.c.avg_z)
+                    .where(tmp.c.e_0 == energy))
 
     def _stats_tmp(self, id: int, plane_num: int | None) -> Subquery:
 
         return (select(self.event.e_0.label("e_0"),
                 func.avg(self.hit.z, type_=Float).label("val"))
+                .select_from(self.db.event
+                             .join(self.db.hit,
+                                   self.event.id == self.hit.fk_event))
+                .where(self.event.fk_config == id)
+                .group_by(self.event.id)
+                .alias("tmp"))
+
+    def stats(self, id: int, label: str, **kwargs) -> None:
+        return super().stats(id, label)
+    
+
+class Shower_waist(Base):
+    """
+    Maximum distance reached in the last detector by the electrons generated 
+    by a primary cosmic ray as function of its initial energy
+
+    :param db: Database object
+    """
+
+    __name__ = "Shower Waist"
+
+    def __init__(self, db: Database) -> None:
+
+        super().__init__(db)
+
+        self.plane_number = None
+
+        # Plot configuration
+        self.plot_config.xscale = "linear"
+        self.plot_config.yscale = "linear"
+        self.plot_config.label = "Showe waist [mm]"
+        self.plot_config.title = (
+            "Shower waist as a function of initial energy"
+        )
+        self.plot_config.report_name = "shower-waist.pdf"
+
+        return None
+
+    def distribution(self, id: int, label: str, **kwargs) -> None:
+        return super().distribution(id, label, R=5)
+
+    def _dist_tmp(self, id: int, energy: float,
+                  plane_num: int | None, R: float | None) -> Subquery | None:
+
+        _stmt = (
+            select(self.event.e_0,
+                   (func.round(func.max(func.sqrt(self.hit.x * self.hit.x + self.hit.y * self.hit.y)) / R) * R)
+                   .label("max_dist"))
+            .select_from(self.db.hit
+                         .join(self.db.event,
+                               self.event.id == self.hit.fk_event))
+            .where(self.event.fk_config == id)
+            .group_by(self.event.id)
+            .alias("tmp"))
+
+        return _stmt
+
+    def _dist_stmt(self, tmp: Subquery | None,
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
+        if tmp is None:
+            raise TypeError("Expected tmp of type Subquery, got None")
+        
+        if grouped:
+            return (select(tmp.c.max_dist, func.count(tmp.c.max_dist))
+                    .where(tmp.c.e_0 == energy)
+                    .group_by(tmp.c.max_dist))
+        else:
+            return (select(tmp.c.max_dist)
+                    .where(tmp.c.e_0 == energy))
+
+
+    def _stats_tmp(self, id: int, plane_num: int | None) -> Subquery:
+
+        return (select(self.event.e_0.label("e_0"),
+                func.max(func.sqrt(self.hit.x * self.hit.x + self.hit.y * self.hit.y)).label("val"))
+                .select_from(self.db.event
+                             .join(self.db.hit,
+                                   self.event.id == self.hit.fk_event))
+                .where(self.event.fk_config == id)
+                .group_by(self.event.id)
+                .alias("tmp"))
+
+    def stats(self, id: int, label: str, **kwargs) -> None:
+        return super().stats(id, label)
+
+
+class Average_time(Base):
+    """
+    Average time of the electrons generated by a primary cosmic ray as
+    function of its initial energy. Not included in the report.
+
+    :param db: Database object
+    """
+
+    __name__ = "Average time"
+
+    def __init__(self, db: Database) -> None:
+
+        super().__init__(db)
+
+        self.plane_number = None
+
+        # Plot configuration
+        self.plot_config.xscale = "linear"
+        self.plot_config.yscale = "linear"
+        self.plot_config.label = "Average time [ns]"
+        self.plot_config.title = (
+            "Average time as a function of initial energy"
+        )
+        self.plot_config.report_name = "average-time.pdf"
+
+        return None
+
+    def distribution(self, id: int, label: str, **kwargs) -> None:
+        return super().distribution(id, label, R=5)
+
+    def _dist_tmp(self, id: int, energy: float,
+                  plane_num: int | None, R: float | None) -> Subquery | None:
+
+        _stmt = (
+            select(self.event.e_0,
+                   (func.round(func.avg(self.hit.t, type_=Float) / R) * R)
+                   .label("avg_t"))
+            .select_from(self.db.hit
+                         .join(self.db.event,
+                               self.event.id == self.hit.fk_event))
+            .where(self.event.fk_config == id)
+            .group_by(self.event.id)
+            .alias("tmp"))
+
+        return _stmt
+
+    def _dist_stmt(self, tmp: Subquery | None,
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
+
+        if tmp is None:
+            raise TypeError("Expected tmp of type Subquery, got None")
+
+        if grouped: 
+            return (select(tmp.c.avg_t, func.count(tmp.c.avg_t))
+                    .where(tmp.c.e_0 == energy)
+                    .group_by(tmp.c.avg_t))
+        else:
+            return(select(tmp.c.avg_t)
+                    .where(tmp.c.e_0 == energy))
+
+    def _stats_tmp(self, id: int, plane_num: int | None) -> Subquery:
+
+        return (select(self.event.e_0.label("e_0"),
+                func.avg(self.hit.t, type_=Float).label("val"))
                 .select_from(self.db.event
                              .join(self.db.hit,
                                    self.event.id == self.hit.fk_event))
@@ -574,13 +737,17 @@ class Plane_hits(Base):
         )
 
     def _dist_stmt(self, tmp: Subquery | None,
-                   id: int, energy: float) -> Select[tuple[Any, int]]:
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
 
         if tmp is None:
             raise TypeError("Expected tmp of Subquery type, got None")
+        
+        if grouped:
+            return (select(tmp.c.hits, func.count(tmp.c.hits))
+                    .group_by(tmp.c.hits))
+        else:
+            return (select(tmp.c.hits))
 
-        return (select(tmp.c.hits, func.count(tmp.c.hits))
-                .group_by(tmp.c.hits))
 
     def distribution(self, id: int, label: str, **kwargs) -> None:
         return super().distribution(id, label, plane_num=self.plane_number)
@@ -598,7 +765,7 @@ class Plane_hits(Base):
 
     def stats(self, id: int, label: str, **kwargs) -> None:
         return super().stats(id, label, plane_num=self.plane_number)
-
+    
 
 class Scattering(Base):
     """
@@ -653,13 +820,16 @@ class Scattering(Base):
         )
 
     def _dist_stmt(self, tmp: Subquery | None,
-                   id: int, energy: float) -> Select[tuple[Any, int]]:
-
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
+        
         if tmp is None:
             raise TypeError("Expected tmp of type Subquery, got None")
-
-        return (select(tmp.c.avg_R, func.count(tmp.c.avg_R))
-                .group_by(tmp.c.avg_R))
+        
+        if grouped:
+            return (select(tmp.c.avg_R, func.count(tmp.c.avg_R))
+                    .group_by(tmp.c.avg_R))
+        else:
+            return (select(tmp.c.avg_R))
 
     def distribution(self, id: int, label: str, **kwargs) -> None:
         return super().distribution(id, label,
@@ -680,7 +850,88 @@ class Scattering(Base):
 
     def stats(self, id: int, label: str, **kwargs) -> None:
         return super().stats(id, label, plane_num=self.plane_number)
+    
 
+class Plane_time(Base):
+    """
+    Average time of electrons impacting in a given plane as function of 
+    the initial energy of the primary cosmic ray. Not included in the report
+
+    :param db: Database object
+    :param plane: Plane number (First is 1, last is 4)
+    """
+
+    def __init__(self, db: Database, plane: int) -> None:
+
+        super().__init__(db)
+
+        self.__name__ = f"Average time: Plane {plane}"
+
+        self.plane_number = plane
+
+        # Plot configuration
+        self.plot_config.xscale = "linear"
+        self.plot_config.yscale = "linear"
+        self.plot_config.label = (
+            f"Average time of plane {self.plane_number} [ns]"
+        )
+        self.plot_config.title = (
+            "Average time as a function of initial energy: "
+            f"Plane {self.plane_number}"
+        )
+        self.plot_config.report_name = (
+            f"Average-time-plane-{self.plane_number}.pdf"
+        )
+
+        return None
+
+    def _dist_tmp(self, id: int, energy: float,
+                  plane_num: int | None, R: float | None) -> Subquery | None:
+
+        return (
+            select(self.event.id.label("id"),
+                   self.event.e_0.label("e_0"),
+                   (func.round(func.avg(self.hit.t) * R) / R).label("avg_t"))
+            .select_from(self.db.event
+                         .join(self.db.hit,
+                               self.event.id == self.hit.fk_event))
+            .where(self.event.fk_config == id,
+                   self.event.e_0 == energy,
+                   self.hit.plane == plane_num)
+            .group_by(self.event.id)
+            .alias("tmp")
+        )
+
+    def _dist_stmt(self, tmp: Subquery | None,
+                   id: int, energy: float, grouped: bool = True) -> Select[tuple[Any, int]]:
+        
+        if tmp is None:
+            raise TypeError("Expected tmp of type Subquery, got None")
+        
+        if grouped:
+            return (select(tmp.c.avg_t, func.count(tmp.c.avg_t))
+                    .group_by(tmp.c.avg_t))
+        else:
+            return (select(tmp.c.avg_t))
+
+    def distribution(self, id: int, label: str, **kwargs) -> None:
+        return super().distribution(id, label,
+                                    R=0.2, plane_num=self.plane_number)
+
+    def _stats_tmp(self, id: int, plane_num: int | None) -> Subquery:
+
+        return (select(self.event.e_0.label("e_0"),
+                       func.avg(self.hit.t).label("val"))
+                .select_from(self.db.event
+                             .join(self.db.hit,
+                                   self.event.id == self.hit.fk_event))
+                .where(self.event.fk_config == id, self.hit.plane == plane_num)
+                .group_by(self.event.id)
+                .alias("tmp"))
+
+    def stats(self, id: int, label: str, **kwargs) -> None:
+        return super().stats(id, label, plane_num=self.plane_number)
+   
 
 def report(db: Database,
            path: str,
@@ -719,9 +970,10 @@ def report(db: Database,
 
             titles.append(title)
 
-    obj_list = [Hit_distribution(db), Shower_depth(db), Plane_hits(db, 2),
-                Plane_hits(db, 3), Plane_hits(db, 4), Scattering(db, 2),
-                Scattering(db, 3), Scattering(db, 4)]
+    obj_list = [Hit_distribution(db), Shower_depth(db), Shower_waist(db), 
+                Plane_hits(db, 2), Plane_hits(db, 3), Plane_hits(db, 4), 
+                Scattering(db, 2), Scattering(db, 3), Scattering(db, 4),
+                ]
 
     with PdfPages(path) as file:
         for obj in obj_list:
@@ -732,3 +984,217 @@ def report(db: Database,
             file.savefig(obj.report_figure())
 
     return None
+
+
+class Matrix:
+    '''
+    Matrix base class for statistical study. 
+
+    :param db: Database object
+    '''
+
+    def __init__(self, db: Database) -> None:
+
+        # Database object
+        self.db = db
+        self.config = db.config.c
+        self.plane = db.plane.c
+        self.event = db.event.c
+        self.hit = db.hit.c
+
+        # Data storage
+        self.variables_data: dict[str, np.array] = {}
+        self.matrix_data: np.array | None = None
+
+        return None
+
+
+    def variables(self, id: int, energy: float, **kwargs) -> dict:
+
+        '''
+        Variables implementation for the matrix rows. 
+        
+        :param id: ID of the desired detector configuration
+        :param energy: Energy associated to the desired variables 
+        '''
+
+        R = kwargs["R"] if "R" in kwargs else None
+
+        obj_list = [
+            ('hit_dist', Hit_distribution(self.db)), 
+            ('shower_depth', Shower_depth(self.db)), 
+            ('shower_waist', Shower_waist(self.db)),
+            ('average time', Average_time(self.db)),
+            ('plane_hits 2', Plane_hits(self.db, 2)),
+            ('plane_hits 3', Plane_hits(self.db, 3)),
+            ('plane_hits 4', Plane_hits(self.db, 4)), 
+            ('scattering 2', Scattering(self.db, 2)),
+            ('scattering 3', Scattering(self.db, 3)), 
+            ('scattering 4', Scattering(self.db, 4)),
+            ('plane_time 2', Plane_time(self.db, 2)),
+            ('plane_time 3', Plane_time(self.db, 3)),
+            ('plane_time 4', Plane_time(self.db, 4))
+            ]
+    
+        self.variables_data = {}
+
+        with self.db.engine.connect() as conn:
+
+            for label, obj in obj_list:
+
+                plane_num = obj.plane_number 
+                _tmp = obj._dist_tmp(id, energy, plane_num, R = R)
+                _stmt = obj._dist_stmt(_tmp, id, energy, grouped = False)
+
+                _result = conn.execute(_stmt).fetchall()
+
+                _data = np.array([
+                    row[0] for row in conn.execute(_stmt)])
+                    
+                if _result != []:
+                    self.variables_data[label] = _data
+
+        return self.variables_data
+    
+    def variables_list(self):
+        '''
+        returns the variables name's list
+        '''
+
+        v = ['hit_dist', 'shower_depth', 'shower_waist', 'average time',
+            'plane_hits 2', 'plane_hits 3', 'plane_hits 4',
+            'scattering 2','scattering 3', 'scattering 4',
+            'plane_time 2', 'plane_time 3', 'plane_time 4']
+        
+        return v
+
+    def get_matrix(self, id: int, energy: float, **kwargs) -> np.ndarray:
+
+        '''
+        Matrix getter method to obtain the variables in a matrix of lenght 
+        (num_events x num_variables). If the variable's len is not num_events, the 
+        variable is not included.
+        '''
+
+        R = kwargs["R"] if "R" in kwargs else None
+
+        self.variables(id, energy, R = R)
+        n_rows = len(next(iter(self.variables_data.values())))
+        matrix = np.zeros((n_rows, len(self.variables_data)), dtype=float)
+
+        for col_idx, (label, data) in enumerate(self.variables_data.items()):
+            if len(data) != n_rows:
+                # print(f'The variable {label} does not have {n_rows} elements, it has {len(data)}.')
+                matrix = np.delete(matrix, -1, axis=1) 
+            else:
+                matrix[:, col_idx] = data
+
+        self.matrix_data = matrix
+        
+        return matrix
+    
+    def get_std_matrix(self, id: int, energy: float, **kwargs) -> np.ndarray:
+
+
+        matrix = self.get_matrix(id, energy, **kwargs)
+        n_rows, _ =  self.matrix_data.shape
+
+        
+        std_matrix = (1/n_rows) * np.matmul(matrix.transpose(),matrix)
+
+        return std_matrix
+
+
+    def get_eigenvalues(self, id, energy, **kwargs):
+
+        '''
+        Computation of the singular value decomposition (SVD) to obtain the singular
+        values of a non-square matrix (equivalent to eigenvalues).
+
+        We compute it by using the reduced form of SVD, following 
+        Daniel Peña's approach in 'Análisis de datos multivariantes'.
+        '''
+
+        matrix = self.get_std_matrix(id, energy, **kwargs)
+        singular_values = np.linalg.svd(matrix, full_matrices=False, compute_uv=False)
+
+        return singular_values**2
+
+
+    def get_eigenvectors(self, id, energy, **kwargs):
+
+        '''
+        Computation of the left singular values (analogous to eigenvectors)
+        of the non-square matrix.
+
+        We are interested in the eigenvectos of matrix.transpose() @ matrix
+        since we want to get an eigenvector for each variable.
+        '''
+
+        matrix = self.get_std_matrix(id, energy, **kwargs)
+        _ , _ , vh = np.linalg.svd(matrix, full_matrices=False)
+        left_singular_vectors = vh.T  # Transpose of the right singular vectors
+
+        #the matrix columns are the eigenvectors
+        return left_singular_vectors
+
+
+class Normaliced_matrix(Matrix):
+
+    def get_matrix(self, id: int, energy: float, **kwargs) -> np.ndarray:
+
+        '''
+        Matrix getter method to obtain the variables in a matrix of lenght 
+        (num_events x num_variables). If the variable's len is not num_events, the 
+        variable is not included.
+        
+        Variables in this case would be normaliced (by substracting its mean value).
+        '''
+        super().get_matrix(id, energy, **kwargs)
+        n_rows, n_cols =  self.matrix_data.shape
+        matrix = np.zeros((n_rows, n_cols), dtype=float)
+
+
+        for col_idx, (label, data) in enumerate(self.variables_data.items()):
+            if len(data) != n_rows:
+                # print(f'The variable {label} does not have {n_rows} elements, it has {len(data)}.')
+                pass
+            else:
+                mean = np.mean(data)
+                matrix[:, col_idx] = data - mean
+
+        self.matrix_data = matrix
+
+        return self.matrix_data
+
+
+class Standardised_matrix(Matrix):
+        
+    def get_matrix(self, id: int, energy: float, **kwargs) -> np.ndarray:
+
+        '''
+        Matrix getter method to obtain the variables in a matrix of lenght 
+        (num_events x num_variables). If the variable's len is not num_events, the 
+        variable is not included.
+
+        Variables in this case would be standardised (by substracting its mean value and 
+        dividing the result by its standar deviation).
+        '''
+
+        super().get_matrix(id, energy, **kwargs)
+        n_rows, n_cols =  self.matrix_data.shape
+        matrix = np.zeros((n_rows, n_cols), dtype=float)
+
+
+        for col_idx, (label, data) in enumerate(self.variables_data.items()):
+            if len(data) != n_rows:
+                # print(f'The variable {label} does not have {n_rows} elements, it has {len(data)}.')
+                pass
+            else:
+                mean = np.mean(data)
+                std = np.std(data)
+                matrix[:, col_idx] =  (data - mean)/std
+
+        self.matrix_data = matrix
+
+        return self.matrix_data
